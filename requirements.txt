@@ -1,0 +1,7 @@
+# Agent from Scratch - Dependencies
+
+# OpenRouter official SDK
+openrouter>=0.6.0
+
+# Future dependencies will be added here:
+# - rich>=13.0.0      # For enhanced terminal output
