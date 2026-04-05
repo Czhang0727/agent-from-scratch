@@ -39,7 +39,9 @@ class Agent:
                 self.io_bus.stop()
                 break
 
-            # Send user input to LLM and get response
+            # Block input and process via LLM
+            self.io_bus.pause_input()
+            self.io_bus.system("Thinking...")
             try:
                 response = self.llm.simple_chat(msg.content)
                 self.io_bus.output(response)
