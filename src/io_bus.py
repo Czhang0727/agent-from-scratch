@@ -112,7 +112,17 @@ class IOBus:
         path = os.path.expanduser(path)
 
         if not os.path.isfile(path):
-            self.error(f"File not found: {path}")
+            # Check if parent dir is unreadable (macOS privacy restriction)
+            parent = os.path.dirname(path) or "."
+            if os.path.isdir(parent) and not os.access(parent, os.R_OK):
+                self.error(f"Permission denied: {parent}")
+                self.error(
+                    "macOS restricts access to this folder. "
+                    "Grant Full Disk Access to your terminal app in: "
+                    "System Settings > Privacy & Security > Full Disk Access"
+                )
+            else:
+                self.error(f"File not found: {path}")
             return None
 
         mime, _ = mimetypes.guess_type(path)
