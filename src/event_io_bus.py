@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
 Event IO Bus Module - An IOBus that publishes input events to an EventBus.
-Pure I/O: reads from stdin, writes to stdout, emits events.
+Supports multimodal input: text, image upload, audio recording.
 """
 
+import os
 import sys
+import mimetypes
 import threading
 import termios
 from event_bus import EventBus
-from core_types.message import IOBusMessage, IOBusMessageType
+from core_types.message import IOMessage, IOMessageType, Content
 
 
 class EventIOBus:
     """
     IO Bus that publishes user input as events on an EventBus.
-    No internal queue — the event bus is the only delivery mechanism.
+    Supports text, image, and audio input via slash commands.
     """
 
     def __init__(self, event_bus: EventBus, input_stream=None, output_stream=None):
@@ -28,7 +30,6 @@ class EventIOBus:
         self._original_termios = None
 
     def start(self) -> None:
-        """Start the input listener in a background thread."""
         self._running = True
         if self.input_stream.isatty():
             try:
@@ -39,7 +40,6 @@ class EventIOBus:
         self._input_thread.start()
 
     def stop(self) -> None:
-        """Stop the input listener and restore terminal settings."""
         self._running = False
         self._input_enabled.set()
         self._restore_terminal()
@@ -74,18 +74,83 @@ class EventIOBus:
             pass
 
     def pause_input(self) -> None:
-        """Pause input and disable echo."""
         self._input_enabled.clear()
         self._disable_echo()
 
     def resume_input(self) -> None:
-        """Resume input and restore echo."""
         self._flush_input_buffer()
         self._restore_terminal()
         self._input_enabled.set()
 
+    # ── Command parsing ──────────────────────────────────────────
+
+    def _parse_input(self, line: str) -> IOMessage | None:
+        """Parse input into an IOMessage. Returns None on command failure."""
+        if line.startswith("/image "):
+            return self._handle_image_command(line)
+        elif line.startswith("/record"):
+            return self._handle_record_command(line)
+        else:
+            return IOMessage.from_text(line)
+
+    def _handle_image_command(self, line: str) -> IOMessage | None:
+        path = line[len("/image "):].strip()
+        path = os.path.expanduser(path)
+
+        if not os.path.isfile(path):
+            self.error(f"File not found: {path}")
+            return None
+
+        mime, _ = mimetypes.guess_type(path)
+        if not mime or not mime.startswith("image/"):
+            self.error(f"Not a recognized image type: {path}")
+            return None
+
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            self.error(f"Cannot read file: {e}")
+            return None
+
+        self.system(f"Loaded image: {path} ({len(data)} bytes, {mime})")
+        return IOMessage(
+            parts=[Content.image(data, mime_type=mime, file_path=path)],
+            msg_type=IOMessageType.USER_INPUT,
+        )
+
+    def _handle_record_command(self, line: str) -> IOMessage | None:
+        parts = line.split()
+        duration = 5.0
+        if len(parts) > 1:
+            try:
+                duration = float(parts[1])
+            except ValueError:
+                self.error(f"Invalid duration: {parts[1]}")
+                return None
+
+        try:
+            from audio_recorder import record_audio
+        except ImportError:
+            self.error("Audio recording requires 'sounddevice' and 'numpy'. Install with: pip install sounddevice numpy")
+            return None
+
+        self.system(f"Recording {duration}s of audio... (speak now)")
+        try:
+            wav_bytes, mime = record_audio(duration=duration)
+        except Exception as e:
+            self.error(f"Recording failed: {e}")
+            return None
+
+        self.system(f"Recorded {len(wav_bytes)} bytes of audio.")
+        return IOMessage(
+            parts=[Content.audio(wav_bytes, mime_type=mime)],
+            msg_type=IOMessageType.USER_INPUT,
+        )
+
+    # ── Input loop ───────────────────────────────────────────────
+
     def _input_loop(self) -> None:
-        """Background thread that reads input and publishes events."""
         while self._running:
             self._input_enabled.wait()
 
@@ -95,40 +160,42 @@ class EventIOBus:
             try:
                 self.write_raw("> ", end="")
                 raw = self.input_stream.readline()
-                if not raw:  # EOF
-                    self.event_bus.publish("user_input", "exit")
+                if not raw:
+                    self.event_bus.publish("user_input", IOMessage.from_text("exit"))
                     break
                 line = raw.strip()
                 if line:
-                    self.event_bus.publish("user_input", line)
+                    msg = self._parse_input(line)
+                    if msg is not None:
+                        self.event_bus.publish("user_input", msg)
             except (EOFError, KeyboardInterrupt):
-                self.event_bus.publish("user_input", "exit")
+                self.event_bus.publish("user_input", IOMessage.from_text("exit"))
                 break
 
-    def write(self, message: IOBusMessage) -> None:
-        """Write a message to the console."""
+    # ── Output ───────────────────────────────────────────────────
+
+    def write(self, message: IOMessage) -> None:
         prefix = self._get_prefix(message.msg_type)
-        self.write_raw(f"{prefix}{message.content}")
+        self.write_raw(f"{prefix}{message.summary()}")
 
     def write_raw(self, content: str, end: str = "\n") -> None:
-        """Write raw content to the output stream."""
         self.output_stream.write(content + end)
         self.output_stream.flush()
 
-    def _get_prefix(self, msg_type: IOBusMessageType) -> str:
+    def _get_prefix(self, msg_type: IOMessageType) -> str:
         prefixes = {
-            IOBusMessageType.AGENT_OUTPUT: "🤖 ",
-            IOBusMessageType.SYSTEM: "ℹ️  ",
-            IOBusMessageType.ERROR: "❌ ",
-            IOBusMessageType.USER_INPUT: "",
+            IOMessageType.AGENT_OUTPUT: "\U0001f916 ",
+            IOMessageType.SYSTEM: "\u2139\ufe0f  ",
+            IOMessageType.ERROR: "\u274c ",
+            IOMessageType.USER_INPUT: "",
         }
         return prefixes.get(msg_type, "")
 
     def output(self, content: str) -> None:
-        self.write(IOBusMessage(content=content, msg_type=IOBusMessageType.AGENT_OUTPUT))
+        self.write(IOMessage.from_text(content, IOMessageType.AGENT_OUTPUT))
 
     def system(self, content: str) -> None:
-        self.write(IOBusMessage(content=content, msg_type=IOBusMessageType.SYSTEM))
+        self.write(IOMessage.from_text(content, IOMessageType.SYSTEM))
 
     def error(self, content: str) -> None:
-        self.write(IOBusMessage(content=content, msg_type=IOBusMessageType.ERROR))
+        self.write(IOMessage.from_text(content, IOMessageType.ERROR))

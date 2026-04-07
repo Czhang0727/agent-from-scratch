@@ -6,6 +6,7 @@ Agent Module - The main agent that processes user input and generates responses.
 import time
 from io_bus import IOBus
 from openrouter_client import OpenRouterClient
+from core_types.message import IOMessage
 
 
 class Agent:
@@ -22,31 +23,39 @@ class Agent:
         """Start the agent's main loop."""
         self.running = True
         self.io_bus.start()
-        self.io_bus.system("Agent started. Waiting for messages...")
+        self.io_bus.system("Agent started. Type text, /image <path>, or /record [seconds]")
 
         while True:
-            # Check if there's a message available (non-blocking)
             msg = self.io_bus.read()
 
             if msg is None:
-                # No message available, sleep and continue
                 time.sleep(0.5)
                 continue
 
-            # Check for exit command
-            if msg.content.lower() in ("exit", "quit", "q"):
+            text = msg.text
+            if text and text.lower() in ("exit", "quit", "q"):
                 self.io_bus.system("Goodbye!")
                 self.io_bus.stop()
                 break
 
-            # Block input and process via LLM
             self.io_bus.pause_input()
             self.io_bus.system("Thinking...")
             try:
-                response = self.llm.simple_chat(msg.content)
+                response = self._process_message(msg)
                 self.io_bus.output(response)
             except Exception as e:
                 self.io_bus.error(f"Error: {e}")
             finally:
-                # Resume input after response
                 self.io_bus.resume_input()
+
+    def _process_message(self, msg: IOMessage) -> str:
+        """Process a multimodal message and return a response."""
+        if msg.has_image:
+            img = msg.images[0]
+            return f"Received image ({img.mime_type}, {len(img.data)} bytes). Vision model integration coming soon."
+
+        if msg.has_audio:
+            audio = msg.audios[0]
+            return f"Received audio ({audio.mime_type}, {len(audio.data)} bytes). Speech-to-text integration coming soon."
+
+        return self.llm.simple_chat(msg.text)

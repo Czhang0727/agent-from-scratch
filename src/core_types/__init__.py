@@ -3,6 +3,6 @@
 Types module - Contains shared type definitions for the agent.
 """
 
-from .message import IOBusMessageType, IOBusMessage
+from .message import IOMessageType, IOMessage, ContentType, Content
 
-__all__ = ["IOBusMessageType", "IOBusMessage"]
+__all__ = ["IOMessageType", "IOMessage", "ContentType", "Content"]
