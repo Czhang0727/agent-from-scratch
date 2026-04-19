@@ -15,18 +15,20 @@ class OpenRouterClient:
     Client for interacting with the OpenRouter API using the official SDK.
     """
 
-    DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct"
+    DEFAULT_MODEL = "qwen/qwen3.5-plus-02-15"
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         """
         Initialize the OpenRouter client.
 
         Args:
             api_key: API key. If None, loads from OPENROUTER_API_KEY env var.
+            model: Default model to use. If None, uses DEFAULT_MODEL.
         """
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY not found in environment variables")
+        self.model = model or self.DEFAULT_MODEL
 
     def chat_completion(
         self,
@@ -47,7 +49,7 @@ class OpenRouterClient:
         Returns:
             Response content string
         """
-        model = model or self.DEFAULT_MODEL
+        model = model or self.model
 
         with OpenRouter(api_key=self.api_key) as client:
             response = client.chat.send(
